@@ -71,6 +71,8 @@ def transcribe_audio(file, api_key):
             model="distil-whisper-large-v3-en",  # Using the English-only model for faster processing
             response_format="text"  # We'll get plain text as the response
         )
+        print(f"Transcription type: {type(transcription)}")
+        print(f"Transcription content: {transcription[:100]}...")  # Print first 100 characters
 
         progress_bar.progress(90)
         status_text.text("Finalizing transcription...")
@@ -78,7 +80,8 @@ def transcribe_audio(file, api_key):
         progress_bar.progress(100)
         status_text.text("Transcription complete!")
 
-        return transcription.text
+        # The transcription is already a string, so we can return it directly
+        return transcription
 
     except Exception as e:
         st.error(f"An error occurred during transcription: {str(e)}")
@@ -281,6 +284,8 @@ def main():
                             if transcription is None:
                                 st.error("Transcription failed. Please try again.")
                                 return
+                            st.write("Transcription result:")
+                            st.write(transcription)  # Display the transcription result
                         else:
                             st.write(f"Processing text file: {file.name}")
                             transcription = process_file(file)
