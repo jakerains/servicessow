@@ -219,8 +219,6 @@ def main():
         st.session_state['api_key'] = ''
     if 'api_key_set' not in st.session_state:
         st.session_state['api_key_set'] = False
-    if 'api_key_from_env' not in st.session_state:
-        st.session_state['api_key_from_env'] = False
     if 'model_name' not in st.session_state:
         st.session_state['model_name'] = ''
     if 'questions' not in st.session_state:
@@ -234,21 +232,12 @@ def main():
     if 'groq_models' not in st.session_state:
         st.session_state['groq_models'] = []
 
-    # Check if the API key is already set in the environment
-    api_key = os.getenv("GROQ_API_KEY")
-
-    if api_key:
-        st.success("Groq API key found in environment variables.")
-        st.session_state['api_key'] = api_key
-        st.session_state['api_key_set'] = True
-        st.session_state['api_key_from_env'] = True
-    elif not st.session_state['api_key_set']:
-        # Only ask for the API key if it's not in the environment and not already set
+    # Only ask for the API key if it's not already set
+    if not st.session_state['api_key_set']:
         api_key = st.text_input("Enter your Groq API key:", type="password")
         if api_key:
             st.session_state['api_key'] = api_key
             st.session_state['api_key_set'] = True
-            st.session_state['api_key_from_env'] = False
             st.success("API key saved for this session.")
             st.rerun()
 
@@ -278,10 +267,6 @@ def main():
         else:
             st.error("Failed to fetch Groq models. Please check your API key and try again.")
 
-        # Only show the warning if the API key was manually entered
-        if not st.session_state.get('api_key_from_env', False):
-            st.warning("Your API key is not stored permanently and will only be used for this session.")
-        
         # Questions section
         st.subheader("Questions")
         if st.button("Hide Questions" if st.session_state['show_questions'] else "Show Questions"):
