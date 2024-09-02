@@ -20,8 +20,7 @@ import base64
 import mimetypes
 from bs4 import BeautifulSoup
 import whisper
-from docx import Document
-import PyPDF2
+import tempfile
 
 # Define the version number
 VERSION = "1.4.0"  # This matches the latest version in the CHANGELOG.md
@@ -52,6 +51,58 @@ def detect_file_type(file):
     
     # If we can't determine the type, return None
     return None
+
+def transcribe_audio(file, api_key):
+    # Create a progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+        temp_file.write(file.getvalue())
+        temp_file_path = temp_file.name
+
+    try:
+        # Load the Whisper model
+        status_text.text("Loading Whisper model...")
+        progress_bar.progress(10)
+        model = whisper.load_model("base")
+        
+        # Update progress
+        status_text.text("Transcribing audio...")
+        progress_bar.progress(30)
+
+        # Transcribe the audio
+        result = model.transcribe(temp_file_path)
+
+        # Update progress
+        progress_bar.progress(90)
+        status_text.text("Finalizing transcription...")
+
+        # Ensure the result is in the expected format
+        if isinstance(result, dict) and 'text' in result:
+            transcription = result
+        else:
+            transcription = {'text': result, 'segments': []}
+
+        # Complete the progress bar
+        progress_bar.progress(100)
+        status_text.text("Transcription complete!")
+
+        return transcription
+
+    except Exception as e:
+        st.error(f"An error occurred during transcription: {str(e)}")
+        return None
+
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        
+        # Clear the progress bar and status text
+        progress_bar.empty()
+        status_text.empty()
 
 def main():
     st.title("Sterling Services: S.O.W. Generator")
@@ -138,18 +189,25 @@ def main():
             st.write(f"File uploaded: {file.name} (Detected as: {file_type})")
             
             if st.button("Analyze"):
-                if file_type == "Audio":
-                    st.write(f"Processing audio file: {file.name}")
-                    transcription = transcribe_audio(file, st.session_state['api_key'])
-                else:
-                    st.write(f"Processing text file: {file.name}")
-                    transcription = process_file(file)
-                
-                # Reset analysis results
-                st.session_state['analysis_results'] = None
-                
-                # Process and display results
-                process_and_display_results(transcription, st.session_state['questions'])
+                try:
+                    if file_type == "Audio":
+                        st.write(f"Processing audio file: {file.name}")
+                        transcription = transcribe_audio(file, st.session_state['api_key'])
+                        if transcription is None:
+                            st.error("Transcription failed. Please try again.")
+                            return
+                    else:
+                        st.write(f"Processing text file: {file.name}")
+                        transcription = process_file(file)
+                    
+                    # Reset analysis results
+                    st.session_state['analysis_results'] = None
+                    
+                    # Process and display results
+                    process_and_display_results(transcription, st.session_state['questions'])
+                except Exception as e:
+                    st.error(f"An error occurred while processing the file: {str(e)}")
+                    st.write("Please try again or contact support if the issue persists.")
             
             # Add this condition to display results if they exist
             elif st.session_state['analysis_results'] is not None:
@@ -270,13 +328,14 @@ def delete_question(category_index, question_index):
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
-            # Check if transcription is a string or an object with a 'text' attribute
-            if isinstance(transcription, str):
+            # Improved handling of transcription format
+            if isinstance(transcription, dict) and 'text' in transcription:
+                text_to_process = transcription['text']
+            elif isinstance(transcription, str):
                 text_to_process = transcription
-            elif hasattr(transcription, 'text'):
-                text_to_process = transcription.text
             else:
-                st.error("Invalid transcription format")
+                st.error(f"Invalid transcription format: {type(transcription)}")
+                st.write("Transcription content:", transcription)
                 return
 
             results = []
@@ -308,10 +367,10 @@ def process_and_display_results(transcription, questions):
             status_text.empty()
 
         st.session_state['analysis_results'] = results
-        if hasattr(transcription, 'text'):
+        if isinstance(transcription, dict) and 'segments' in transcription:
             st.session_state['transcription'] = format_transcript(transcription)
         else:
-            st.session_state['transcription'] = transcription  # Store the original text if it's not a transcription object
+            st.session_state['transcription'] = text_to_process
     else:
         results = st.session_state['analysis_results']
     
@@ -360,22 +419,6 @@ def process_and_display_results(transcription, questions):
     
     # Display results
     display_results(results)
-
-def transcribe_audio(file, api_key):
-    # Save the uploaded file temporarily
-    with open("temp_audio.mp3", "wb") as f:
-        f.write(file.getvalue())
-    
-    # Load the Whisper model
-    model = whisper.load_model("base")
-    
-    # Transcribe the audio
-    result = model.transcribe("temp_audio.mp3")
-    
-    # Remove the temporary file
-    os.remove("temp_audio.mp3")
-    
-    return result
 
 def process_file(file):
     file_extension = os.path.splitext(file.name)[1].lower()
