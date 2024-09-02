@@ -2,7 +2,6 @@ import streamlit as st
 import os
 import json
 from groq import Groq
-from groq.types.audio.transcription import Transcription
 import pandas as pd
 import io
 from reportlab.lib.pagesizes import letter
@@ -71,12 +70,9 @@ def transcribe_audio(file, api_key):
         progress_bar.progress(30)
 
         with open(temp_file_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                file=(temp_file_path, audio_file.read()),
-                model="distil-whisper-large-v3-en",  # Using the faster, English-only model
-                response_format="verbose_json",  # To get timestamps for audio segments
-                temperature=0.0,  # For more deterministic output
-                language="en"  # Specifying English for potentially improved accuracy
+            response = client.audio.transcriptions.create(
+                file=audio_file,
+                model="whisper-1",
             )
 
         progress_bar.progress(90)
@@ -85,7 +81,7 @@ def transcribe_audio(file, api_key):
         progress_bar.progress(100)
         status_text.text("Transcription complete!")
 
-        return transcription
+        return response.text
 
     except Exception as e:
         st.error(f"An error occurred during transcription: {str(e)}")
@@ -330,11 +326,7 @@ def main():
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
-            if isinstance(transcription, Transcription):
-                text_to_process = transcription.text
-            elif isinstance(transcription, dict) and 'text' in transcription:
-                text_to_process = transcription['text']
-            elif isinstance(transcription, str):
+            if isinstance(transcription, str):
                 text_to_process = transcription
             else:
                 st.error(f"Invalid transcription format: {type(transcription)}")
