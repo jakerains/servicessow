@@ -345,12 +345,12 @@ def main():
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
-            if isinstance(transcription, str):
-                text_to_process = transcription
-            else:
+            if not transcription or not isinstance(transcription, str):
                 st.error(f"Invalid transcription format: {type(transcription)}")
                 st.write("Transcription content:", transcription)
                 return
+
+            text_to_process = transcription
 
             results = []
             progress_bar = st.progress(0)
