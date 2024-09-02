@@ -59,21 +59,18 @@ def transcribe_audio(file, api_key):
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
-        temp_file.write(file.getvalue())
-        temp_file_path = temp_file.name
-
     try:
         client = Groq(api_key=api_key)
 
         status_text.text("Preparing audio for transcription...")
         progress_bar.progress(30)
 
-        with open(temp_file_path, "rb") as audio_file:
-            response = client.audio.transcriptions.create(
-                file=audio_file,
-                model="whisper-1",
-            )
+        # Create a transcription of the audio file
+        transcription = client.audio.transcriptions.create(
+            file=file,
+            model="distil-whisper-large-v3-en",  # Using the English-only model for faster processing
+            response_format="text"  # We'll get plain text as the response
+        )
 
         progress_bar.progress(90)
         status_text.text("Finalizing transcription...")
@@ -81,15 +78,13 @@ def transcribe_audio(file, api_key):
         progress_bar.progress(100)
         status_text.text("Transcription complete!")
 
-        return response.text
+        return transcription.text
 
     except Exception as e:
         st.error(f"An error occurred during transcription: {str(e)}")
         return None
 
     finally:
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
         progress_bar.empty()
         status_text.empty()
 
