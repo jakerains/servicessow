@@ -26,7 +26,7 @@ import requests
 import random
 
 # Define the version number
-VERSION = "2.0.1"  # Updated version number
+VERSION = "2.0.0"  # Updated version number
 
 # Set page config at the very top, after imports
 st.set_page_config(page_title="Sterling Services: S.O.W. Generator (Groq Version)", page_icon="📄")
@@ -244,7 +244,7 @@ def main():
 
         # Model selection dropdown
         if st.session_state['groq_models']:
-            default_model = 'llama-3.1-70b-versatile'  # Updated default model
+            default_model = 'llama-3.1-8b-instant'
             default_index = st.session_state['groq_models'].index(default_model) if default_model in st.session_state['groq_models'] else 0
             
             model_name = st.selectbox(
