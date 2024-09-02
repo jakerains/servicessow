@@ -1,0 +1,97 @@
+{
+  "project_questions": [
+    {
+      "category": "Project Overview",
+      "questions": [
+        {
+          "text": "What is the primary objective of the project?",
+          "instruction": ""
+        },
+        {
+          "text": "What are the key deliverables?",
+          "instruction": "be sure to list these out as well as include any additional info about each key deliverable."
+        },
+        {
+          "text": "What are the success criteria for the project?",
+          "instruction": ""
+        }
+      ]
+    },
+    {
+      "category": "Scope of Work",
+      "questions": [
+        "What tasks need to be completed?",
+        "What are the specific requirements and constraints?",
+        "Are there any assumptions or exclusions?"
+      ]
+    },
+    {
+      "category": "Project Deliverables",
+      "questions": [
+        "What are the specific deliverables and their descriptions?",
+        "What are the deadlines for each deliverable?",
+        "What are the acceptance criteria for each deliverable?"
+      ]
+    },
+    {
+      "category": "Timeline and Milestones",
+      "questions": [
+        "What is the project start date?",
+        "What is the project end date?",
+        "What are the major milestones and their deadlines?"
+      ]
+    },
+    {
+      "category": "Roles and Responsibilities",
+      "questions": [
+        "Who are the key stakeholders?",
+        "What are the roles and responsibilities of each team member?",
+        "Are there any third-party vendors or partners involved?"
+      ]
+    },
+    {
+      "category": "Budget and Payment Terms",
+      "questions": [
+        "What is the total budget for the project?",
+        "How will payments be structured (e.g., fixed Fee price, Fixed Fee Milestones, or time and materials)?",
+        "What are the payment milestones?"
+      ]
+    },
+    {
+      "category": "Project Management and Reporting",
+      "questions": [
+        "What project management methodology will be used?",
+        "How will progress be tracked and reported?",
+        "What tools and software will be used for project management and communication?"
+      ]
+    },
+    {
+      "category": "Risk Management",
+      "questions": [
+        "What are the potential risks and their mitigation strategies?",
+        "Who is responsible for managing risks?"
+      ]
+    },
+    {
+      "category": "Legal and Compliance",
+      "questions": [
+        "Are there any legal or regulatory requirements that need to be addressed?",
+        "What are the confidentiality and non-disclosure requirements?"
+      ]
+    },
+    {
+      "category": "Post-Project Support",
+      "questions": [
+        "Will there be any post-project support or maintenance required?",
+        "What are the terms for post-project support?"
+      ]
+    },
+    {
+      "category": "Dependencies and Constraints",
+      "questions": [
+        "Are there any dependencies on other projects or external factors?",
+        "What constraints could impact the project?"
+      ]
+    }
+  ]
+}
