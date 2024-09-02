@@ -97,6 +97,10 @@ def transcribe_audio(file):
         response.raise_for_status()  # Raise an error for bad status codes
 
         transcription = response.text
+        if not transcription:
+            st.error("Received empty transcription response.")
+            return None
+
         print(f"Transcription type: {type(transcription)}")
         print(f"Transcription content: {transcription[:100]}...")  # Print first 100 characters
 
