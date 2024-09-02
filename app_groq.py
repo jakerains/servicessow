@@ -31,16 +31,15 @@ VERSION = "2.0.0"  # Updated version number
 # Set page config at the very top, after imports
 st.set_page_config(page_title="Sterling Services: S.O.W. Generator (Groq Version)", page_icon="📄")
 
-# Initialize Groq client
-def init_groq_client():
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        api_key = st.secrets.get("GROQ_API_KEY")
-    
-    if not api_key:
-        st.error("Groq API key not found. Please set it in your environment variables or Streamlit secrets.")
-        return None
-    
+# Initialize session state
+if 'api_key' not in st.session_state:
+    st.session_state['api_key'] = ''
+if 'api_key_set' not in st.session_state:
+    st.session_state['api_key_set'] = False
+if 'groq_client' not in st.session_state:
+    st.session_state['groq_client'] = None
+
+def init_groq_client(api_key):
     try:
         client = Groq(api_key=api_key)
         # Test if the client has the 'models' attribute
@@ -51,38 +50,28 @@ def init_groq_client():
         st.error(f"Failed to initialize Groq client: {str(e)}")
         return None
 
-# Use the function to initialize the client
-groq_client = init_groq_client()
+def fetch_groq_models():
+    if st.session_state['groq_client'] is None:
+        st.error("Groq client is not initialized. Cannot fetch models.")
+        return []
 
-def detect_file_type(file):
-    # Get the file extension
-    file_extension = os.path.splitext(file.name)[1].lower()
-    
-    # Define file type based on extension
-    audio_extensions = ['.mp3', '.wav', '.m4a', '.aac', '.flac']
-    text_extensions = ['.txt', '.rtf', '.doc', '.docx', '.pdf', '.odt', '.md']
-    
-    if file_extension in audio_extensions:
-        return "Audio"
-    elif file_extension in text_extensions:
-        return "Text"
-    else:
-        # If the extension is not recognized, try to guess the MIME type
-        mime_type, _ = mimetypes.guess_type(file.name)
-        if mime_type:
-            if mime_type.startswith('audio'):
-                return "Audio"
-            elif mime_type.startswith('text') or mime_type == 'application/pdf':
-                return "Text"
-    
-    # If we can't determine the type, return None
-    return None
+    try:
+        models = st.session_state['groq_client'].models.list()
+        
+        if isinstance(models, ModelList) and hasattr(models, 'data'):
+            chat_models = [model.id for model in models.data if isinstance(model, Model) and not model.id.startswith('whisper')]
+        else:
+            st.error(f"Unexpected model list structure: {type(models)}")
+            return []
+        
+        print(f"Extracted chat models: {chat_models}")  # This will show us the final list of models
+        return chat_models
+    except Exception as e:
+        st.error(f"Failed to fetch Groq models: {str(e)}")
+        return []
 
 def transcribe_audio(file):
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        api_key = st.secrets.get("GROQ_API_KEY")
-    
+    api_key = st.session_state['api_key']
     if not api_key:
         st.error("Groq API key not found. Please set it in your environment variables or Streamlit secrets.")
         return None
@@ -124,6 +113,30 @@ def transcribe_audio(file):
         progress_bar.empty()
         status_text.empty()
 
+def detect_file_type(file):
+    # Get the file extension
+    file_extension = os.path.splitext(file.name)[1].lower()
+    
+    # Define file type based on extension
+    audio_extensions = ['.mp3', '.wav', '.m4a', '.aac', '.flac']
+    text_extensions = ['.txt', '.rtf', '.doc', '.docx', '.pdf', '.odt', '.md']
+    
+    if file_extension in audio_extensions:
+        return "Audio"
+    elif file_extension in text_extensions:
+        return "Text"
+    else:
+        # If the extension is not recognized, try to guess the MIME type
+        mime_type, _ = mimetypes.guess_type(file.name)
+        if mime_type:
+            if mime_type.startswith('audio'):
+                return "Audio"
+            elif mime_type.startswith('text') or mime_type == 'application/pdf':
+                return "Text"
+    
+    # If we can't determine the type, return None
+    return None
+
 def process_file(file):
     file_extension = os.path.splitext(file.name)[1].lower()
     
@@ -139,7 +152,7 @@ def process_file(file):
         raise ValueError(f"Unsupported file type: {file_extension}")
 
 def process_transcription(text, questions, model_name):
-    client = groq_client
+    client = st.session_state['groq_client']
     
     for category in questions["project_questions"]:
         category_results = {"category": category["category"], "answers": []}
@@ -178,26 +191,6 @@ def load_questions():
     except json.JSONDecodeError:
         st.error(f"Error decoding JSON from '{questions_file}'. Please check the file format.")
         return None
-
-def fetch_groq_models():
-    if groq_client is None:
-        st.error("Groq client is not initialized. Cannot fetch models.")
-        return []
-
-    try:
-        models = groq_client.models.list()
-        
-        if isinstance(models, ModelList) and hasattr(models, 'data'):
-            chat_models = [model.id for model in models.data if isinstance(model, Model) and not model.id.startswith('whisper')]
-        else:
-            st.error(f"Unexpected model list structure: {type(models)}")
-            return []
-        
-        print(f"Extracted chat models: {chat_models}")  # This will show us the final list of models
-        return chat_models
-    except Exception as e:
-        st.error(f"Failed to fetch Groq models: {str(e)}")
-        return []
 
 def main():
     st.title("Sterling Services: S.O.W. Generator (Groq Version)")
@@ -238,6 +231,7 @@ def main():
         if api_key:
             st.session_state['api_key'] = api_key
             st.session_state['api_key_set'] = True
+            st.session_state['groq_client'] = init_groq_client(api_key)
             st.success("API key saved for this session.")
             st.rerun()
 
@@ -306,7 +300,9 @@ def main():
                             if transcription is None:
                                 st.error("Transcription failed. Please try again.")
                                 return
-                            # Remove the display of transcription result
+                            st.success("Transcription complete!")
+                            # Store the transcription in session state for later use
+                            st.session_state['transcription'] = transcription
                         else:
                             st.write(f"Processing text file: {file.name}")
                             transcription = process_file(file)
@@ -359,7 +355,7 @@ def process_and_display_results(transcription, questions):
             total_questions = sum(len(category["questions"]) for category in questions["project_questions"])
             processed_questions = 0
 
-            client = groq_client
+            client = st.session_state['groq_client']
 
             for category in questions["project_questions"]:
                 category_results = {"category": category["category"], "answers": []}
