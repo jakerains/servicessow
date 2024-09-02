@@ -29,7 +29,16 @@ VERSION = "2.0.0"  # Updated version number
 # Set page config at the very top, after imports
 st.set_page_config(page_title="Sterling Services: S.O.W. Generator (Groq Version)", page_icon="📄")
 
-# ... (keep all the existing functions like detect_file_type, process_file, format_transcript, etc.)
+# Initialize Groq client
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# Test the client
+try:
+    # Attempt to access the 'audio' attribute
+    groq_client.audio
+    st.success("Groq client initialized successfully")
+except AttributeError:
+    st.error("Failed to initialize Groq client: 'audio' attribute not found")
 
 def detect_file_type(file):
     # Get the file extension
@@ -60,7 +69,7 @@ def transcribe_audio(file, api_key):
     status_text = st.empty()
 
     try:
-        client = Groq(api_key=api_key)
+        client = groq_client
 
         status_text.text("Preparing audio for transcription...")
         progress_bar.progress(30)
@@ -106,7 +115,7 @@ def process_file(file):
         raise ValueError(f"Unsupported file type: {file_extension}")
 
 def process_transcription(text, questions, api_key, model_name):
-    client = Groq(api_key=api_key)
+    client = groq_client
     
     for category in questions["project_questions"]:
         category_results = {"category": category["category"], "answers": []}
@@ -321,8 +330,6 @@ def main():
     if st.session_state['show_changelog']:
         display_changelog()
 
-# ... (keep all other functions like generate_text_results, generate_pdf_results, etc.)
-
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
@@ -340,7 +347,7 @@ def process_and_display_results(transcription, questions):
             total_questions = sum(len(category["questions"]) for category in questions["project_questions"])
             processed_questions = 0
 
-            client = Groq(api_key=st.session_state['api_key'])
+            client = groq_client
 
             for category in questions["project_questions"]:
                 category_results = {"category": category["category"], "answers": []}
