@@ -144,16 +144,20 @@ def detect_file_type(file):
 def process_file(file):
     file_extension = os.path.splitext(file.name)[1].lower()
     
-    if file_extension in ['.txt', '.md']:
-        return file.getvalue().decode('utf-8')
-    elif file_extension == '.pdf':
-        pdf_reader = PyPDF2.PdfReader(file)
-        return ' '.join([page.extract_text() for page in pdf_reader.pages])
-    elif file_extension in ['.doc', '.docx']:
-        doc = Document(file)
-        return ' '.join([para.text for para in doc.paragraphs])
-    else:
-        raise ValueError(f"Unsupported file type: {file_extension}")
+    try:
+        if file_extension in ['.txt', '.md']:
+            return file.getvalue().decode('utf-8')
+        elif file_extension == '.pdf':
+            pdf_reader = PyPDF2.PdfReader(file)
+            return ' '.join([page.extract_text() for page in pdf_reader.pages])
+        elif file_extension in ['.doc', '.docx']:
+            doc = Document(file)
+            return ' '.join([para.text for para in doc.paragraphs])
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}")
+    except Exception as e:
+        st.error(f"An error occurred while processing the file: {str(e)}")
+        return None
 
 def process_transcription(text, questions, model_name):
     client = st.session_state['groq_client']
@@ -310,6 +314,9 @@ def main():
                         else:
                             st.write(f"Processing text file: {file.name}")
                             transcription = process_file(file)
+                            if transcription is None:
+                                st.error("File processing failed. Please try again.")
+                                return
                         
                         # Reset analysis results
                         st.session_state['analysis_results'] = None
@@ -345,12 +352,12 @@ def main():
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
-            if not transcription or not isinstance(transcription, str):
+            if isinstance(transcription, str):
+                text_to_process = transcription
+            else:
                 st.error(f"Invalid transcription format: {type(transcription)}")
                 st.write("Transcription content:", transcription)
                 return
-
-            text_to_process = transcription
 
             results = []
             progress_bar = st.progress(0)
