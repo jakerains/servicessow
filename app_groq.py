@@ -338,6 +338,269 @@ def main():
     if st.session_state['show_changelog']:
         display_changelog()
 
+def display_changelog():
+    changelog_path = "CHANGELOG.md"
+    try:
+        with open(changelog_path, "r") as file:
+            changelog_content = file.read()
+        st.markdown(changelog_content)
+    except FileNotFoundError:
+        st.error(f"Changelog file '{changelog_path}' not found.")
+    except Exception as e:
+        st.error(f"An error occurred while reading the changelog: {str(e)}")
+
+def process_and_display_results(transcription, questions):
+    if st.session_state['analysis_results'] is None:
+        with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
+            if isinstance(transcription, str):
+                text_to_process = transcription
+            else:
+                st.error(f"Invalid transcription format: {type(transcription)}")
+                st.write("Transcription content:", transcription)
+                return
+
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_questions = sum(len(category["questions"]) for category in questions["project_questions"])
+            processed_questions = 0
+
+            client = st.session_state['groq_client']
+
+            for category in questions["project_questions"]:
+                category_results = {"category": category["category"], "answers": []}
+                for question in category["questions"]:
+                    question_text = question['text'] if isinstance(question, dict) else question
+                    prompt = f"Based on the following text, answer this question: {question_text}\n\nText: {text_to_process}"
+                    response = client.chat.completions.create(
+                        model=st.session_state['model_name'],
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=150
+                    )
+                    answer = {
+                        "question": question_text,
+                        "answer": response.choices[0].message.content.strip()
+                    }
+                    category_results["answers"].append(answer)
+                    
+                    processed_questions += 1
+                    progress = processed_questions / total_questions
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing: {category['category']} - {question_text}")
+
+                results.append(category_results)
+
+            progress_bar.empty()
+            status_text.empty()
+
+        st.session_state['analysis_results'] = results
+        st.session_state['transcription'] = text_to_process
+    else:
+        results = st.session_state['analysis_results']
+    
+    st.subheader("Analysis Results")
+    
+    # Generate results in different formats
+    text_results = generate_text_results(results)
+    pdf_results = generate_pdf_results(results)
+    docx_results = generate_docx_results(results)
+    
+    # Create download buttons at the top
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.download_button(
+            label="Download as TXT",
+            data=text_results,
+            file_name="analysis_results.txt",
+            mime="text/plain",
+            key="download_txt"
+        )
+    with col2:
+        st.download_button(
+            label="Download as PDF",
+            data=pdf_results,
+            file_name="analysis_results.pdf",
+            mime="application/pdf",
+            key="download_pdf"
+        )
+    with col3:
+        st.download_button(
+            label="Download as DOCX",
+            data=docx_results,
+            file_name="analysis_results.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="download_docx"
+        )
+    with col4:
+        if 'transcription' in st.session_state and st.session_state['transcription']:
+            st.download_button(
+                label="Download Transcript",
+                data=st.session_state['transcription'],
+                file_name="original_transcript.txt",
+                mime="text/plain",
+                key="download_transcript"
+            )
+    
+    # Display results
+    display_results(results)
+
+def display_results(results):
+    for category in results:
+        st.subheader(category['category'])
+        for qa in category['answers']:
+            st.markdown(f"**Q: {qa['question']}**")
+            st.write(f"A: {qa['answer']}")
+            st.markdown("---")
+
+def generate_text_results(results):
+    text_output = ""
+    for category in results:
+        text_output += f"{category['category']}\n\n"
+        for qa in category['answers']:
+            text_output += f"Q: {qa['question']}\nA: {qa['answer']}\n\n"
+        text_output += "\n"
+    return text_output
+
+def generate_pdf_results(results):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    # Create custom styles
+    styles.add(ParagraphStyle(name='Justify', parent=styles['BodyText'], alignment=TA_JUSTIFY))
+    styles.add(ParagraphStyle(name='Heading1Custom', parent=styles['Heading1'], fontSize=16, spaceAfter=12))
+    styles.add(ParagraphStyle(name='Heading3Custom', parent=styles['Heading3'], fontSize=14, spaceAfter=8))
+    
+    story = []
+
+    for category in results:
+        story.append(Paragraph(category['category'], styles['Heading1Custom']))
+        for qa in category['answers']:
+            story.append(Paragraph(f"Q: {qa['question']}", styles['Heading3Custom']))
+            story.append(Paragraph(f"A: {qa['answer']}", styles['Justify']))
+            story.append(Spacer(1, 12))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+def generate_docx_results(results):
+    doc = Document()
+    
+    # Define styles
+    styles = doc.styles
+    heading1_style = styles['Heading 1']
+    heading3_style = styles['Heading 3']
+    normal_style = styles['Normal']
+
+    for category in results:
+        heading = doc.add_paragraph(category['category'])
+        heading.style = heading1_style
+        for qa in category['answers']:
+            question = doc.add_paragraph(f"Q: {qa['question']}")
+            question.style = heading3_style
+            answer = doc.add_paragraph(f"A: {qa['answer']}")
+            answer.style = normal_style
+            doc.add_paragraph()  # Add a blank line
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+def format_transcript(transcription):
+    formatted_text = ""
+    for segment in transcription['segments']:
+        start_time = format_time(segment['start'])
+        end_time = format_time(segment['end'])
+        formatted_text += f"[{start_time} - {end_time}] {segment['text']}\n"
+    return formatted_text
+
+def format_time(seconds):
+    minutes, seconds = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+def display_and_customize_questions():
+    st.subheader("Review and Customize Questions")
+    
+    for category_index, category in enumerate(st.session_state['questions']["project_questions"]):
+        st.markdown(f"### {category['category']}")
+        for i, question in enumerate(category["questions"]):
+            with st.container():
+                col1, col2, col3 = st.columns([6, 1, 1])
+                with col1:
+                    q_text = question["text"] if isinstance(question, dict) else question
+                    new_text = st.text_input(
+                        f"Question {i+1}",
+                        value=q_text,
+                        key=f"q_{category_index}_{i}",
+                        label_visibility="collapsed"
+                    )
+                    if new_text != q_text:
+                        update_question(category_index, i, new_text)
+                with col2:
+                    if st.button("📝", key=f"instruction_{category_index}_{i}", help="Add instructions"):
+                        st.session_state[f'show_instruction_{category_index}_{i}'] = True
+                with col3:
+                    if st.button("🗑️", key=f"delete_{category_index}_{i}", help="Delete question"):
+                        delete_question(category_index, i)
+                        st.rerun()
+                
+                if st.session_state.get(f'show_instruction_{category_index}_{i}', False):
+                    with st.expander("Question Instructions", expanded=True):
+                        instruction = st.text_area(
+                            "Instructions",
+                            value=question["instruction"] if isinstance(question, dict) and "instruction" in question else "",
+                            key=f"instruction_text_{category_index}_{i}",
+                            height=100,
+                            label_visibility="visible"
+                        )
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Save", key=f"save_instruction_{category_index}_{i}"):
+                                save_instruction(category_index, i, instruction)
+                                st.success("Instructions saved!")
+                                st.session_state[f'show_instruction_{category_index}_{i}'] = False
+                        with col2:
+                            if st.button("Cancel", key=f"cancel_instruction_{category_index}_{i}"):
+                                st.session_state[f'show_instruction_{category_index}_{i}'] = False
+        
+        # Add question button at the end of each category
+        if st.button("Add Question", key=f"add_question_{category_index}"):
+            add_question(category_index)
+            st.rerun()
+        
+        st.markdown("---")  # Add a separator after each category
+
+def update_question(category_index, question_index, new_text):
+    st.session_state['questions']["project_questions"][category_index]["questions"][question_index]["text"] = new_text
+    save_questions_to_file(st.session_state['questions'])
+
+def add_question(category_index):
+    new_question = {"text": "New question", "instruction": ""}
+    st.session_state['questions']["project_questions"][category_index]["questions"].append(new_question)
+    save_questions_to_file(st.session_state['questions'])
+
+def delete_question(category_index, question_index):
+    st.session_state['questions']["project_questions"][category_index]["questions"].pop(question_index)
+    save_questions_to_file(st.session_state['questions'])
+
+def save_instruction(category_index, question_index, instruction):
+    st.session_state['questions']["project_questions"][category_index]["questions"][question_index]["instruction"] = instruction
+    save_questions_to_file(st.session_state['questions'])
+
+def save_questions_to_file(questions):
+    try:
+        with open("questions.json", "w") as file:
+            json.dump(questions, file, indent=4)
+    except Exception as e:
+        st.error(f"Error saving questions to file: {str(e)}")
+
+if __name__ == "__main__":
+    main()
+
 def process_and_display_results(transcription, questions):
     if st.session_state['analysis_results'] is None:
         with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
