@@ -71,7 +71,7 @@ def fetch_groq_models():
         return []
 
 def transcribe_audio(file):
-    api_key = st.session_state.get('api_key')
+    api_key = st.session_state['api_key']
     if not api_key:
         st.error("Groq API key not found. Please set it in your environment variables or Streamlit secrets.")
         return None
