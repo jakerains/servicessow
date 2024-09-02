@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2024-09-06
+
+### Changed (app_groq.py)
+- Set `llama-3.1-70b-versatile` as the default model for Groq API integration
+
 ## [2.0.0] - 2024-09-05
 
 ### Added (app_groq.py)
