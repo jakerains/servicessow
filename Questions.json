@@ -9,7 +9,7 @@
         },
         {
           "text": "What are the key deliverables?",
-          "instruction": ""
+          "instruction": "Give me this as a bulleted list with sub items broken out."
         },
         {
           "text": "What are the success criteria for the project?",

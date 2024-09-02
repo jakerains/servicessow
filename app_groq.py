@@ -2,6 +2,8 @@ import streamlit as st
 import os
 import json
 from groq import Groq
+from groq.types.model_list import ModelList
+from groq.types.model import Model
 import pandas as pd
 import io
 from reportlab.lib.pagesizes import letter
@@ -30,15 +32,27 @@ VERSION = "2.0.0"  # Updated version number
 st.set_page_config(page_title="Sterling Services: S.O.W. Generator (Groq Version)", page_icon="📄")
 
 # Initialize Groq client
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+def init_groq_client():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        api_key = st.secrets.get("GROQ_API_KEY")
+    
+    if not api_key:
+        st.error("Groq API key not found. Please set it in your environment variables or Streamlit secrets.")
+        return None
+    
+    try:
+        client = Groq(api_key=api_key)
+        # Test if the client has the 'models' attribute
+        client.models.list()
+        st.success("Groq client initialized successfully")
+        return client
+    except Exception as e:
+        st.error(f"Failed to initialize Groq client: {str(e)}")
+        return None
 
-# Test the client
-try:
-    # Attempt to access the 'audio' attribute
-    groq_client.audio
-    st.success("Groq client initialized successfully")
-except AttributeError:
-    st.error("Failed to initialize Groq client: 'audio' attribute not found")
+# Use the function to initialize the client
+groq_client = init_groq_client()
 
 def detect_file_type(file):
     # Get the file extension
@@ -64,35 +78,45 @@ def detect_file_type(file):
     # If we can't determine the type, return None
     return None
 
-def transcribe_audio(file, api_key):
+def transcribe_audio(file):
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        api_key = st.secrets.get("GROQ_API_KEY")
+    
+    if not api_key:
+        st.error("Groq API key not found. Please set it in your environment variables or Streamlit secrets.")
+        return None
+
     progress_bar = st.progress(0)
     status_text = st.empty()
 
     try:
-        client = groq_client
-
         status_text.text("Preparing audio for transcription...")
         progress_bar.progress(30)
 
-        # Create a transcription of the audio file
-        transcription = client.audio.transcriptions.create(
-            file=file,
-            model="distil-whisper-large-v3-en",  # Using the English-only model for faster processing
-            response_format="text"  # We'll get plain text as the response
-        )
+        url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {api_key}"
+        }
+        files = {
+            "file": file,
+            "model": (None, "distil-whisper-large-v3-en"),
+            "response_format": (None, "text")
+        }
+
+        response = requests.post(url, headers=headers, files=files)
+        response.raise_for_status()  # Raise an error for bad status codes
+
+        transcription = response.text
         print(f"Transcription type: {type(transcription)}")
         print(f"Transcription content: {transcription[:100]}...")  # Print first 100 characters
-
-        progress_bar.progress(90)
-        status_text.text("Finalizing transcription...")
 
         progress_bar.progress(100)
         status_text.text("Transcription complete!")
 
-        # The transcription is already a string, so we can return it directly
         return transcription
 
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         st.error(f"An error occurred during transcription: {str(e)}")
         return None
 
@@ -114,7 +138,7 @@ def process_file(file):
     else:
         raise ValueError(f"Unsupported file type: {file_extension}")
 
-def process_transcription(text, questions, api_key, model_name):
+def process_transcription(text, questions, model_name):
     client = groq_client
     
     for category in questions["project_questions"]:
@@ -155,19 +179,23 @@ def load_questions():
         st.error(f"Error decoding JSON from '{questions_file}'. Please check the file format.")
         return None
 
-def fetch_groq_models(api_key):
-    url = "https://api.groq.com/openai/v1/models"
-    headers = {
-        "Authorization": f"Bearer {api_key}"
-    }
+def fetch_groq_models():
+    if groq_client is None:
+        st.error("Groq client is not initialized. Cannot fetch models.")
+        return []
+
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        models = response.json()['data']
-        # Filter out non-chat models (e.g., whisper models)
-        chat_models = [model['id'] for model in models if not model['id'].startswith('whisper')]
+        models = groq_client.models.list()
+        
+        if isinstance(models, ModelList) and hasattr(models, 'data'):
+            chat_models = [model.id for model in models.data if isinstance(model, Model) and not model.id.startswith('whisper')]
+        else:
+            st.error(f"Unexpected model list structure: {type(models)}")
+            return []
+        
+        print(f"Extracted chat models: {chat_models}")  # This will show us the final list of models
         return chat_models
-    except requests.RequestException as e:
+    except Exception as e:
         st.error(f"Failed to fetch Groq models: {str(e)}")
         return []
 
@@ -228,8 +256,8 @@ def main():
         st.success("API key is set for this session.")
 
         # Fetch Groq models if not already fetched
-        if not st.session_state['groq_models']:
-            st.session_state['groq_models'] = fetch_groq_models(st.session_state['api_key'])
+        if 'groq_models' not in st.session_state or not st.session_state['groq_models']:
+            st.session_state['groq_models'] = fetch_groq_models()
 
         # Model selection dropdown
         if st.session_state['groq_models']:
@@ -289,12 +317,11 @@ def main():
                     try:
                         if file_type == "Audio":
                             st.write(f"Processing audio file: {file.name}")
-                            transcription = transcribe_audio(file, st.session_state['api_key'])
+                            transcription = transcribe_audio(file)
                             if transcription is None:
                                 st.error("Transcription failed. Please try again.")
                                 return
-                            st.write("Transcription result:")
-                            st.write(transcription)  # Display the transcription result
+                            # Remove the display of transcription result
                         else:
                             st.write(f"Processing text file: {file.name}")
                             transcription = process_file(file)
