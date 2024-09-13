@@ -252,7 +252,7 @@ def main():
 
         # Model selection dropdown
         if st.session_state['groq_models']:
-            default_model = 'llama-3.1-70b-versatile'  # Updated default model
+            default_model = 'llama-3.1-8b-instant'  # Updated default model
             default_index = st.session_state['groq_models'].index(default_model) if default_model in st.session_state['groq_models'] else 0
             
             model_name = st.selectbox(
