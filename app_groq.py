@@ -252,20 +252,30 @@ def main():
 
         # Model selection dropdown
         if st.session_state['groq_models']:
-            default_model = 'llama-3.1-8b-instant'  # Updated default model
+            default_model = 'llama-3.1-8b-instant'  # Default model
+            
+            # Set the default model if it hasn't been set yet
+            if 'model_name' not in st.session_state:
+                st.session_state['model_name'] = default_model
+                st.session_state['config_set'] = True
+
             default_index = st.session_state['groq_models'].index(default_model) if default_model in st.session_state['groq_models'] else 0
             
-            model_name = st.selectbox(
+            selected_model = st.selectbox(
                 "Select Groq model",
                 options=st.session_state['groq_models'],
                 index=default_index,
                 key='model_selector'
             )
             
-            if st.button("Set Configuration", key="set_config_button"):
-                st.session_state['model_name'] = model_name
-                st.session_state['config_set'] = True
-                st.success(f"Configuration set: Using model {model_name}")
+            # Only show the Set Configuration button if a different model is selected
+            if selected_model != st.session_state['model_name']:
+                if st.button("Set Configuration", key="set_config_button"):
+                    st.session_state['model_name'] = selected_model
+                    st.session_state['config_set'] = True
+                    st.success(f"Configuration updated: Using model {selected_model}")
+            else:
+                st.info(f"Current model: {st.session_state['model_name']}")
         else:
             st.error("Failed to fetch Groq models. Please check your API key and try again.")
 
