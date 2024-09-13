@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2024-09-06
+
+### Changed (app_groq.py)
+- Updated default model to 'llama-3.1-8b-instant' for faster initial processing
+- Improved model selection UI: automatically sets default model without user action
+- "Set Configuration" button now only appears when a non-default model is selected
+- Enhanced error handling in file processing to prevent 'NoneType' errors
+- Improved transcription handling for both audio and text files
+
+### Fixed (app_groq.py)
+- Resolved issues with 'NoneType' object errors during file processing
+- Fixed potential errors in transcription handling for various file types
+
 ## [2.0.0] - 2024-09-05
 
 ### Added (app_groq.py)
