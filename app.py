@@ -1,542 +1,504 @@
 import streamlit as st
-import os
+import boto3
 import json
-from openai import OpenAI
-import pandas as pd
-import io
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_JUSTIFY
+import os
+import time
+import requests
 from io import BytesIO
-import docx2txt
-import PyPDF2
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 from docx import Document
-from docx.shared import Inches
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.enum.style import WD_STYLE_TYPE
-import markdown
-import base64
-import mimetypes
-from bs4 import BeautifulSoup
-import whisper
-import tempfile
+from dotenv import load_dotenv
+from pydub import AudioSegment
+import multiprocessing
+import concurrent.futures
 
-# Define the version number
-VERSION = "1.4.0"  # This matches the latest version in the CHANGELOG.md
+# Load environment variables
+load_dotenv()
 
-# Set page config at the very top, after imports
-st.set_page_config(page_title="Sterling Services: S.O.W. Generator", page_icon="📄")
-
-def detect_file_type(file):
-    # Get the file extension
-    file_extension = os.path.splitext(file.name)[1].lower()
-    
-    # Define file type based on extension
-    audio_extensions = ['.mp3', '.wav', '.m4a', '.aac', '.flac']
-    text_extensions = ['.txt', '.rtf', '.doc', '.docx', '.pdf', '.odt', '.md']
-    
-    if file_extension in audio_extensions:
-        return "Audio"
-    elif file_extension in text_extensions:
-        return "Text"
-    else:
-        # If the extension is not recognized, try to guess the MIME type
-        mime_type, _ = mimetypes.guess_type(file.name)
-        if mime_type:
-            if mime_type.startswith('audio'):
-                return "Audio"
-            elif mime_type.startswith('text') or mime_type == 'application/pdf':
-                return "Text"
-    
-    # If we can't determine the type, return None
-    return None
-
-def transcribe_audio(file, api_key):
-    # Create a progress bar
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
-        temp_file.write(file.getvalue())
-        temp_file_path = temp_file.name
-
+def load_questions():
+    """Load questions from Questions.json file"""
     try:
-        # Load the Whisper model
-        status_text.text("Loading Whisper model...")
-        progress_bar.progress(10)
-        model = whisper.load_model("base")
-        
-        # Update progress
-        status_text.text("Transcribing audio...")
-        progress_bar.progress(30)
-
-        # Transcribe the audio
-        result = model.transcribe(temp_file_path)
-
-        # Update progress
-        progress_bar.progress(90)
-        status_text.text("Finalizing transcription...")
-
-        # Ensure the result is in the expected format
-        if isinstance(result, dict) and 'text' in result:
-            transcription = result
-        else:
-            transcription = {'text': result, 'segments': []}
-
-        # Complete the progress bar
-        progress_bar.progress(100)
-        status_text.text("Transcription complete!")
-
-        return transcription
-
+        with open('Questions.json', 'r') as f:
+            return json.load(f)
     except Exception as e:
-        st.error(f"An error occurred during transcription: {str(e)}")
+        st.error(f"Error loading questions: {str(e)}")
         return None
 
-    finally:
-        # Clean up the temporary file
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+# Initialize session state
+if 'aws_credentials' not in st.session_state:
+    # Try environment variables first
+    aws_credentials = {
+        'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID'),
+        'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY'),
+        'region_name': os.getenv('AWS_REGION', 'us-east-1'),
+        'bucket_name': os.getenv('AWS_BUCKET_NAME')
+    }
+    
+    # If not in environment variables, try Streamlit secrets
+    if not all(aws_credentials.values()):
+        try:
+            aws_credentials = {
+                'aws_access_key_id': st.secrets["aws"]["aws_access_key_id"],
+                'aws_secret_access_key': st.secrets["aws"]["aws_secret_access_key"],
+                'region_name': st.secrets["aws"]["aws_region"],
+                'bucket_name': st.secrets["aws"]["aws_bucket_name"]
+            }
+        except Exception as e:
+            st.error(f"Error loading AWS credentials: {str(e)}")
+            aws_credentials = None
+    
+    st.session_state['aws_credentials'] = aws_credentials
+
+if 'questions' not in st.session_state:
+    st.session_state['questions'] = load_questions()
+
+if 'results' not in st.session_state:
+    st.session_state['results'] = None
+
+if 'transcription' not in st.session_state:
+    st.session_state['transcription'] = None
+
+def transcribe_audio(file, aws_credentials):
+    """Transcribe audio file using AWS Transcribe with detailed progress tracking"""
+    try:
+        transcribe = boto3.client(
+            'transcribe',
+            aws_access_key_id=aws_credentials['aws_access_key_id'],
+            aws_secret_access_key=aws_credentials['aws_secret_access_key'],
+            region_name=aws_credentials['region_name']
+        )
         
-        # Clear the progress bar and status text
+        s3 = boto3.client('s3', **{k: aws_credentials[k] for k in ['aws_access_key_id', 'aws_secret_access_key', 'region_name']})
+        bucket_name = aws_credentials['bucket_name']
+        file_name = f"audio_{int(time.time())}.mp3"
+        
+        # Create progress indicators
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Step 1: Upload to S3
+        status_text.text("Uploading audio file to S3...")
+        progress_bar.progress(10)
+        s3.upload_fileobj(file, bucket_name, file_name)
+        progress_bar.progress(20)
+        
+        # Step 2: Start transcription
+        status_text.text("Starting transcription job...")
+        job_name = f"transcription_{int(time.time())}"
+        transcribe.start_transcription_job(
+            TranscriptionJobName=job_name,
+            Media={'MediaFileUri': f"s3://{bucket_name}/{file_name}"},
+            MediaFormat='mp3',
+            LanguageCode='en-US',
+            Settings={
+                'ShowSpeakerLabels': True,
+                'MaxSpeakerLabels': 2,
+            }
+        )
+        progress_bar.progress(30)
+        
+        # Step 3: Monitor progress
+        while True:
+            status = transcribe.get_transcription_job(TranscriptionJobName=job_name)
+            job_status = status['TranscriptionJob']['TranscriptionJobStatus']
+            
+            if job_status == 'IN_PROGRESS':
+                # Get progress details
+                if 'Progress' in status['TranscriptionJob']:
+                    progress = status['TranscriptionJob']['Progress']
+                    progress_percent = int(30 + (progress * 60))  # Scale from 30% to 90%
+                    progress_bar.progress(progress_percent)
+                    status_text.text(f"Transcribing audio... {progress_percent}% complete")
+                
+            elif job_status == 'COMPLETED':
+                status_text.text("Retrieving transcription results...")
+                progress_bar.progress(90)
+                response = requests.get(status['TranscriptionJob']['Transcript']['TranscriptFileUri'])
+                transcription = response.json()['results']['transcripts'][0]['transcript']
+                
+                # Clean up S3
+                status_text.text("Cleaning up temporary files...")
+                s3.delete_object(Bucket=bucket_name, Key=file_name)
+                
+                progress_bar.progress(100)
+                status_text.text("Transcription complete!")
+                time.sleep(1)  # Let user see completion
+                status_text.empty()
+                progress_bar.empty()
+                
+                return transcription
+                
+            elif job_status == 'FAILED':
+                error_reason = status['TranscriptionJob'].get('FailureReason', 'Unknown error')
+                status_text.text(f"Transcription failed: {error_reason}")
+                progress_bar.empty()
+                raise Exception(f"Transcription failed: {error_reason}")
+            
+            time.sleep(5)  # Poll every 5 seconds
+            
+    except Exception as e:
+        status_text.text(f"Error: {str(e)}")
         progress_bar.empty()
-        status_text.empty()
+        st.error(f"Error in transcription: {str(e)}")
+        return None
+
+def start_transcription_job(transcribe_client, job_name, s3_uri, aws_credentials):
+    """Helper function to manage a single transcription job"""
+    try:
+        transcribe_client.start_transcription_job(
+            TranscriptionJobName=job_name,
+            Media={'MediaFileUri': s3_uri},
+            MediaFormat='mp3',
+            LanguageCode='en-US',
+            Settings={
+                'ShowSpeakerLabels': True,
+                'MaxSpeakerLabels': 2,
+            }
+        )
+        
+        while True:
+            status = transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
+            job_status = status['TranscriptionJob']['TranscriptionJobStatus']
+            
+            if job_status in ['COMPLETED', 'FAILED']:
+                break
+            time.sleep(5)
+        
+        if job_status == 'COMPLETED':
+            response = requests.get(status['TranscriptionJob']['Transcript']['TranscriptFileUri'])
+            return response.json()['results']['transcripts'][0]['transcript']
+        else:
+            raise Exception(f"Transcription failed: {status['TranscriptionJob'].get('FailureReason')}")
+            
+    except Exception as e:
+        raise Exception(f"Error in transcription job: {str(e)}")
+
+def process_with_bedrock(text, questions, aws_credentials):
+    """Process questions in parallel batches"""
+    import concurrent.futures
+    
+    def process_batch(batch):
+        results = []
+        for category in batch:
+            # Process each category
+            category_results = {
+                'category': category['category'],
+                'answers': []
+            }
+            
+            for question in category['questions']:
+                if isinstance(question, dict):
+                    question_text = question['text']
+                    instruction = question.get('instruction', '')
+                else:
+                    question_text = question
+                    instruction = ''
+                
+                prompt = f"""Based on the following text, please answer this question: {question_text}
+
+                {f'Additional instruction: {instruction}' if instruction else ''}
+
+                Text: {text}
+
+                Please provide a clear, detailed, and professional answer based only on the information provided in the text. 
+                If the information is not available in the text, please indicate that clearly."""
+
+                try:
+                    response = bedrock_runtime.invoke_model(
+                        modelId='us.anthropic.claude-3-5-haiku-20241022-v1:0',
+                        body=json.dumps({
+                            "anthropic_version": "bedrock-2023-05-31",
+                            "max_tokens": 1000,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": prompt
+                                }
+                            ]
+                        })
+                    )
+                    
+                    response_body = json.loads(response['body'].read())
+                    answer = {
+                        "question": question_text,
+                        "answer": response_body['content'][0]['text']
+                    }
+                    category_results["answers"].append(answer)
+                    
+                except Exception as e:
+                    st.error(f"Error processing question '{question_text}': {str(e)}")
+                    continue
+            
+            results.append(category_results)
+        return results
+    
+    try:
+        bedrock_runtime = boto3.client(
+            service_name='bedrock-runtime',
+            aws_access_key_id=aws_credentials['aws_access_key_id'],
+            aws_secret_access_key=aws_credentials['aws_secret_access_key'],
+            region_name=aws_credentials['region_name']
+        )
+        
+        # Split questions into batches
+        batch_size = 3  # Process 3 categories at a time
+        batches = [questions["project_questions"][i:i + batch_size] for i in range(0, len(questions["project_questions"]), batch_size)]
+        
+        # Process batches in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            batch_results = list(executor.map(process_batch, batches))
+        
+        # Combine results
+        final_results = []
+        for batch in batch_results:
+            final_results.extend(batch)
+        
+        return final_results
+        
+    except Exception as e:
+        st.error(f"Error initializing Bedrock: {str(e)}")
+        return None
+
+def generate_text_results(results):
+    """Generate text format results"""
+    text_output = ""
+    for category in results:
+        text_output += f"\n{category['category']}\n{'='*len(category['category'])}\n\n"
+        for qa in category['answers']:
+            text_output += f"Q: {qa['question']}\nA: {qa['answer']}\n\n"
+    return text_output
+
+def generate_pdf_results(results):
+    """Generate PDF format results"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+    
+    for category in results:
+        elements.append(Paragraph(category['category'], styles['Heading1']))
+        elements.append(Spacer(1, 12))
+        for qa in category['answers']:
+            elements.append(Paragraph(f"Q: {qa['question']}", styles['Heading2']))
+            elements.append(Paragraph(f"A: {qa['answer']}", styles['Normal']))
+            elements.append(Spacer(1, 12))
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def generate_docx_results(results):
+    """Generate DOCX format results"""
+    doc = Document()
+    
+    # Define styles using names instead of IDs
+    for category in results:
+        # Use built-in heading style names
+        heading = doc.add_paragraph(category['category'])
+        heading.style = 'Heading 1'
+        
+        for qa in category['answers']:
+            # Question with Heading 2
+            question = doc.add_paragraph(f"Q: {qa['question']}")
+            question.style = 'Heading 2'
+            
+            # Answer with Normal style
+            answer = doc.add_paragraph(f"A: {qa['answer']}")
+            answer.style = 'Normal'
+            
+            # Add spacing
+            doc.add_paragraph()
+    
+    # Save to buffer
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+def edit_questions():
+    """Edit questions in the Questions.json file"""
+    questions = st.session_state.get('questions', load_questions())
+    
+    if questions:
+        edited_questions = {"project_questions": []}
+        
+        st.subheader("Edit Questions")
+        st.write("Add, edit, or remove categories and questions below.")
+        
+        # Add new category button
+        if st.button("Add New Category"):
+            questions["project_questions"].append({
+                "category": "New Category",
+                "questions": ["New Question"]
+            })
+        
+        # Edit existing categories and questions
+        for cat_idx, category in enumerate(questions["project_questions"]):
+            st.markdown("---")
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                new_category = st.text_input(
+                    f"Category {cat_idx + 1}",
+                    value=category["category"],
+                    key=f"cat_{cat_idx}"
+                )
+            
+            with col2:
+                if st.button("Delete Category", key=f"del_cat_{cat_idx}"):
+                    continue
+            
+            category_questions = []
+            for q_idx, question in enumerate(category["questions"]):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    if isinstance(question, dict):
+                        question_text = st.text_input(
+                            f"Question {cat_idx + 1}.{q_idx + 1}",
+                            value=question["text"],
+                            key=f"q_{cat_idx}_{q_idx}"
+                        )
+                        instruction = st.text_input(
+                            "Instruction (optional)",
+                            value=question.get("instruction", ""),
+                            key=f"i_{cat_idx}_{q_idx}"
+                        )
+                        if instruction:
+                            category_questions.append({
+                                "text": question_text,
+                                "instruction": instruction
+                            })
+                        else:
+                            category_questions.append(question_text)
+                    else:
+                        question_text = st.text_input(
+                            f"Question {cat_idx + 1}.{q_idx + 1}",
+                            value=question,
+                            key=f"q_{cat_idx}_{q_idx}"
+                        )
+                        category_questions.append(question_text)
+                
+                with col2:
+                    if st.button("Delete Question", key=f"del_q_{cat_idx}_{q_idx}"):
+                        continue
+            
+            # Add new question button for this category
+            if st.button("Add Question", key=f"add_q_{cat_idx}"):
+                category_questions.append("New Question")
+            
+            if category_questions:  # Only add category if it has questions
+                edited_questions["project_questions"].append({
+                    "category": new_category,
+                    "questions": category_questions
+                })
+        
+        # Save changes button
+        if st.button("Save Changes"):
+            try:
+                with open('Questions.json', 'w') as f:
+                    json.dump(edited_questions, f, indent=4)
+                st.session_state['questions'] = edited_questions
+                st.success("Questions saved successfully!")
+            except Exception as e:
+                st.error(f"Error saving questions: {str(e)}")
 
 def main():
     st.title("Sterling Services: S.O.W. Generator")
     
-    # Configuration section
-    st.subheader("Configuration")
+    tab1, tab2 = st.tabs(["Generate SOW", "Edit Questions"])
     
-    # Initialize session state
-    if 'api_key' not in st.session_state:
-        st.session_state['api_key'] = ''
-    if 'api_key_set' not in st.session_state:
-        st.session_state['api_key_set'] = False
-    if 'model_name' not in st.session_state:
-        st.session_state['model_name'] = 'gpt-4o-mini'
-    if 'questions' not in st.session_state:
-        st.session_state['questions'] = load_questions()
-    if 'show_questions' not in st.session_state:
-        st.session_state['show_questions'] = False
-    if 'analysis_results' not in st.session_state:
-        st.session_state['analysis_results'] = None
-    if 'config_set' not in st.session_state:
-        st.session_state['config_set'] = False
-
-    # Check if the API key is already set in the environment
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if api_key:
-        st.success("OpenAI API key found in environment variables.")
-        st.session_state['api_key'] = api_key
-        st.session_state['api_key_set'] = True
-    elif not st.session_state['api_key_set']:
-        # Only ask for the API key if it's not in the environment and not already set
-        api_key = st.text_input("Enter your OpenAI API key:", type="password")
-        if api_key:
-            st.session_state['api_key'] = api_key
-            st.session_state['api_key_set'] = True
-            st.success("API key saved for this session.")
-            st.rerun()  # This will rerun the script, effectively removing the input field
-
-    if st.session_state['api_key_set']:
-        st.success("API key is set for this session.")
-
-    # Model selection
-    model_name = st.text_input("Enter the GPT model name", value=st.session_state['model_name'])
-    
-    if st.button("Set Configuration"):
-        if model_name:
-            st.session_state['model_name'] = model_name
-            st.success(f"Configuration set: Using model {model_name}")
-        else:
-            st.error("Please provide a model name.")
-
-    st.warning("Your API key is not stored permanently and will only be used for this session.")
-    
-    # Questions section
-    st.subheader("Questions")
-    if st.button("Hide Questions" if st.session_state['show_questions'] else "Show Questions"):
-        st.session_state['show_questions'] = not st.session_state['show_questions']
-        st.rerun()
-
-    # Display and customize questions
-    if st.session_state['show_questions']:
-        display_and_customize_questions()
-
-    # File upload section
-    st.subheader("File Upload")
-    st.write("Upload your audio or text file")
-    
-    if 'uploaded_file' not in st.session_state:
-        st.session_state['uploaded_file'] = None
-
-    file = st.file_uploader("Choose a file", type=["mp3", "wav", "m4a", "txt", "rtf", "doc", "docx", "pdf", "odt", "md"])
-    
-    if file is not None:
-        st.session_state['uploaded_file'] = file
-
-    if st.session_state['uploaded_file'] is not None:
-        file = st.session_state['uploaded_file']
-        file_type = detect_file_type(file)
+    with tab1:
+        if not st.session_state.get('aws_credentials'):
+            st.error("AWS credentials not found. Please check your environment variables or secrets.toml file.")
+            return
         
-        if file_type is None:
-            st.error("Unsupported file type. Please upload an audio or text file.")
-        else:
-            st.write(f"File uploaded: {file.name} (Detected as: {file_type})")
-            
-            if st.button("Analyze"):
-                try:
-                    if file_type == "Audio":
-                        st.write(f"Processing audio file: {file.name}")
-                        transcription = transcribe_audio(file, st.session_state['api_key'])
-                        if transcription is None:
-                            st.error("Transcription failed. Please try again.")
-                            return
-                    else:
-                        st.write(f"Processing text file: {file.name}")
-                        transcription = process_file(file)
-                    
-                    # Reset analysis results
-                    st.session_state['analysis_results'] = None
-                    
-                    # Process and display results
-                    process_and_display_results(transcription, st.session_state['questions'])
-                except Exception as e:
-                    st.error(f"An error occurred while processing the file: {str(e)}")
-                    st.write("Please try again or contact support if the issue persists.")
-            
-            # Add this condition to display results if they exist
-            elif st.session_state['analysis_results'] is not None:
-                process_and_display_results(None, None)
-
-    # Initialize session state for changelog visibility
-    if 'show_changelog' not in st.session_state:
-        st.session_state['show_changelog'] = False
-
-    # Add version number and changelog at the bottom
-    st.markdown("---")
-    st.markdown(f"<p style='text-align: center; color: gray;'>Version {VERSION}</p>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray;'>Created by GenAI Jake</p>", unsafe_allow_html=True)
-    
-    # Toggle changelog visibility
-    if st.button("Hide Changelog" if st.session_state['show_changelog'] else "View Changelog"):
-        st.session_state['show_changelog'] = not st.session_state['show_changelog']
-        st.rerun()
-
-    # Display changelog if show_changelog is True
-    if st.session_state['show_changelog']:
-        display_changelog()
-
-def display_and_customize_questions():
-    st.subheader("Review and Customize Questions")
-    
-    for category_index, category in enumerate(st.session_state['questions']["project_questions"]):
-        st.markdown(f"### {category['category']}")
-        for i, question in enumerate(category["questions"]):
-            with st.container():
-                col1, col2, col3 = st.columns([6, 1, 1])
-                with col1:
-                    q_text = question["text"] if isinstance(question, dict) else question
-                    st.text_input(
-                        f"Question {i+1}",
-                        value=q_text,
-                        key=f"q_{category_index}_{i}",
-                        on_change=update_question,
-                        args=(category_index, i),
-                        label_visibility="collapsed"
+        uploaded_file = st.file_uploader("Upload an audio or text file", type=['mp3', 'wav', 'txt', 'pdf', 'docx'])
+        
+        if uploaded_file is not None:
+            # Process the file
+            if uploaded_file.type.startswith('audio/'):
+                if 'transcription' not in st.session_state or not st.session_state['transcription']:
+                    with st.spinner('Transcribing audio...'):
+                        transcription = transcribe_audio(uploaded_file, st.session_state['aws_credentials'])
+                        if transcription:
+                            st.session_state['transcription'] = transcription
+                            st.success("Audio transcribed successfully!")
+                            
+                            # Automatically start analysis after transcription
+                            with st.spinner('Analyzing content with AWS Bedrock...'):
+                                results = process_with_bedrock(
+                                    st.session_state['transcription'],
+                                    st.session_state['questions'],
+                                    st.session_state['aws_credentials']
+                                )
+                                if results:
+                                    st.session_state['results'] = results
+                                    st.success("Analysis complete!")
+                                    st.rerun()
+            else:
+                # Handle text files
+                text_content = uploaded_file.read().decode('utf-8')
+                st.session_state['transcription'] = text_content
+                
+                # Automatically start analysis for text files too
+                with st.spinner('Analyzing content with AWS Bedrock...'):
+                    results = process_with_bedrock(
+                        st.session_state['transcription'],
+                        st.session_state['questions'],
+                        st.session_state['aws_credentials']
                     )
-                with col2:
-                    if st.button("📝", key=f"instruction_{category_index}_{i}", help="Add instructions"):
-                        st.session_state[f'show_instruction_{category_index}_{i}'] = True
-                with col3:
-                    if st.button("🗑️", key=f"delete_{category_index}_{i}", help="Delete question"):
-                        delete_question(category_index, i)
+                    if results:
+                        st.session_state['results'] = results
+                        st.success("Analysis complete!")
                         st.rerun()
-                
-                if st.session_state.get(f'show_instruction_{category_index}_{i}', False):
-                    with st.expander("Question Instructions", expanded=True):
-                        instruction = st.text_area(
-                            "Instructions",
-                            value=question["instruction"] if isinstance(question, dict) and "instruction" in question else "",
-                            key=f"instruction_text_{category_index}_{i}",
-                            height=100,
-                            label_visibility="visible"
-                        )
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("Save", key=f"save_instruction_{category_index}_{i}"):
-                                save_instruction(category_index, i, instruction)
-                                st.success("Instructions saved!")
-                                st.session_state[f'show_instruction_{category_index}_{i}'] = False
-                                st.rerun()
-                        with col2:
-                            if st.button("Cancel", key=f"cancel_instruction_{category_index}_{i}"):
-                                st.session_state[f'show_instruction_{category_index}_{i}'] = False
-                                st.rerun()
-        
-        # Add question button at the end of each category
-        if st.button("Add Question", key=f"add_question_{category_index}"):
-            add_question(category_index)
-            st.rerun()
-        
-        st.markdown("---")  # Add a separator after each category
-
-def save_instruction(category_index, question_index, instruction):
-    questions = st.session_state['questions']["project_questions"][category_index]["questions"]
-    if isinstance(questions[question_index], str):
-        # Convert string to dictionary
-        questions[question_index] = {
-            "text": questions[question_index],
-            "instruction": instruction
-        }
-    else:
-        # Update existing dictionary
-        questions[question_index]["instruction"] = instruction
-    
-    save_questions_to_file(st.session_state['questions'])
-
-def save_questions_to_file(questions):
-    with open('Questions.json', 'w') as f:
-        json.dump(questions, f, indent=2)
-
-def load_questions():
-    try:
-        with open('Questions.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        st.error("Questions.json file not found. Please ensure it exists in the same directory as the script.")
-        return {"project_questions": []}
-
-def update_question(category_index, question_index):
-    new_text = st.session_state[f"q_{category_index}_{question_index}"]
-    st.session_state['questions']["project_questions"][category_index]["questions"][question_index]["text"] = new_text
-    save_questions_to_file(st.session_state['questions'])
-
-def add_question(category_index):
-    new_question = {"text": "New question", "instruction": ""}
-    st.session_state['questions']["project_questions"][category_index]["questions"].append(new_question)
-    save_questions_to_file(st.session_state['questions'])
-
-def delete_question(category_index, question_index):
-    del st.session_state['questions']["project_questions"][category_index]["questions"][question_index]
-    save_questions_to_file(st.session_state['questions'])
-
-def process_and_display_results(transcription, questions):
-    if st.session_state['analysis_results'] is None:
-        with st.spinner(f"Analyzing content using {st.session_state['model_name']}..."):
-            # Improved handling of transcription format
-            if isinstance(transcription, dict) and 'text' in transcription:
-                text_to_process = transcription['text']
-            elif isinstance(transcription, str):
-                text_to_process = transcription
-            else:
-                st.error(f"Invalid transcription format: {type(transcription)}")
-                st.write("Transcription content:", transcription)
-                return
-
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
             
-            total_questions = sum(len(category["questions"]) for category in questions["project_questions"])
-            processed_questions = 0
-
-            for category, answer in process_transcription(text_to_process, questions, st.session_state['api_key'], st.session_state['model_name']):
-                if not any(result['category'] == category for result in results):
-                    results.append({"category": category, "answers": []})
-                for result in results:
-                    if result['category'] == category:
-                        result['answers'].append(answer)
+            # Show transcription preview and results
+            if st.session_state.get('transcription'):
+                st.write("### Content Preview:")
+                st.write(st.session_state['transcription'][:500] + "..." if len(st.session_state['transcription']) > 500 else st.session_state['transcription'])
                 
-                processed_questions += 1
-                progress = processed_questions / total_questions
-                progress_bar.progress(progress)
-                status_text.text(f"Processing: {category} - {answer['question']}")
-
-                # Display the latest result
-                st.subheader(category)
-                st.markdown(f"**Q: {answer['question']}**")
-                st.write(f"A: {answer['answer']}")
-                st.markdown("---")
-
-            progress_bar.empty()
-            status_text.empty()
-
-        st.session_state['analysis_results'] = results
-        if isinstance(transcription, dict) and 'segments' in transcription:
-            st.session_state['transcription'] = format_transcript(transcription)
-        else:
-            st.session_state['transcription'] = text_to_process
-    else:
-        results = st.session_state['analysis_results']
+                # Display results if available
+                if st.session_state.get('results'):
+                    st.write("### Analysis Results")
+                    for category in st.session_state['results']:
+                        with st.expander(f"📋 {category['category']}", expanded=True):
+                            for qa in category['answers']:
+                                st.markdown(f"**Q:** {qa['question']}")
+                                st.markdown(f"**A:** {qa['answer']}")
+                                st.markdown("---")
+                    
+                    # Download buttons
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        text_output = generate_text_results(st.session_state['results'])
+                        st.download_button(
+                            "Download TXT",
+                            text_output,
+                            "results.txt",
+                            "text/plain"
+                        )
+                    with col2:
+                        pdf_output = generate_pdf_results(st.session_state['results'])
+                        st.download_button(
+                            "Download PDF",
+                            pdf_output,
+                            "results.pdf",
+                            "application/pdf"
+                        )
+                    with col3:
+                        docx_output = generate_docx_results(st.session_state['results'])
+                        st.download_button(
+                            "Download DOCX",
+                            docx_output,
+                            "results.docx",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
     
-    st.subheader("Analysis Results")
-    
-    # Generate results in different formats
-    text_results = generate_text_results(results)
-    pdf_results = generate_pdf_results(results)
-    docx_results = generate_docx_results(results)
-    
-    # Create download buttons at the top
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.download_button(
-            label="Download as TXT",
-            data=text_results,
-            file_name="analysis_results.txt",
-            mime="text/plain",
-            key="download_txt"
-        )
-    with col2:
-        st.download_button(
-            label="Download as PDF",
-            data=pdf_results,
-            file_name="analysis_results.pdf",
-            mime="application/pdf",
-            key="download_pdf"
-        )
-    with col3:
-        st.download_button(
-            label="Download as DOCX",
-            data=docx_results,
-            file_name="analysis_results.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="download_docx"
-        )
-    with col4:
-        if 'transcription' in st.session_state and st.session_state['transcription']:
-            st.download_button(
-                label="Download Transcript",
-                data=st.session_state['transcription'],
-                file_name="original_transcript.txt",
-                mime="text/plain",
-                key="download_transcript"
-            )
-    
-    # Display results
-    display_results(results)
-
-def process_file(file):
-    file_extension = os.path.splitext(file.name)[1].lower()
-    
-    if file_extension in ['.txt', '.md']:
-        return file.getvalue().decode('utf-8')
-    elif file_extension == '.pdf':
-        pdf_reader = PyPDF2.PdfReader(file)
-        return ' '.join([page.extract_text() for page in pdf_reader.pages])
-    elif file_extension in ['.doc', '.docx']:
-        doc = Document(file)
-        return ' '.join([para.text for para in doc.paragraphs])
-    else:
-        raise ValueError(f"Unsupported file type: {file_extension}")
-
-def format_transcript(transcription):
-    formatted_text = ""
-    for segment in transcription['segments']:
-        start_time = format_time(segment['start'])
-        end_time = format_time(segment['end'])
-        formatted_text += f"[{start_time} - {end_time}] {segment['text']}\n"
-    return formatted_text
-
-def format_time(seconds):
-    minutes, seconds = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-def process_transcription(text, questions, api_key, model_name):
-    client = OpenAI(api_key=api_key)
-    
-    for category in questions["project_questions"]:
-        category_results = {"category": category["category"], "answers": []}
-        for question in category["questions"]:
-            if isinstance(question, dict):
-                question_text = question['text']
-            else:
-                question_text = question
-            prompt = f"Based on the following text, answer this question: {question_text}\n\nText: {text}"
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=150
-            )
-            answer = {
-                "question": question_text,
-                "answer": response.choices[0].message.content.strip()
-            }
-            category_results["answers"].append(answer)
-            yield category_results["category"], answer
-
-    return
-
-def generate_text_results(results):
-    text_output = ""
-    for category in results:
-        text_output += f"{category['category']}\n\n"
-        for qa in category['answers']:
-            text_output += f"Q: {qa['question']}\nA: {qa['answer']}\n\n"
-        text_output += "\n"
-    return text_output
-
-def generate_pdf_results(results):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-
-    for category in results:
-        story.append(Paragraph(category['category'], styles['Heading1']))
-        for qa in category['answers']:
-            story.append(Paragraph(f"Q: {qa['question']}", styles['Heading3']))
-            story.append(Paragraph(f"A: {qa['answer']}", styles['BodyText']))
-            story.append(Spacer(1, 12))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def generate_docx_results(results):
-    doc = Document()
-    
-    # Define styles
-    styles = doc.styles
-    heading1_style = styles['Heading 1']
-    heading3_style = styles['Heading 3']
-    normal_style = styles['Normal']
-
-    for category in results:
-        heading = doc.add_paragraph(category['category'])
-        heading.style = heading1_style
-        for qa in category['answers']:
-            question = doc.add_paragraph(f"Q: {qa['question']}")
-            question.style = heading3_style
-            answer = doc.add_paragraph(f"A: {qa['answer']}")
-            answer.style = normal_style
-            doc.add_paragraph()  # Add a blank line
-
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def display_results(results):
-    for category in results:
-        st.subheader(category['category'])
-        for qa in category['answers']:
-            st.markdown(f"**Q: {qa['question']}**")
-            st.write(f"A: {qa['answer']}")
-            st.markdown("---")
-
-def display_changelog():
-    try:
-        with open('CHANGELOG.md', 'r') as f:
-            changelog = f.read()
-        st.markdown(changelog)
-    except FileNotFoundError:
-        st.error("CHANGELOG.md file not found.")
+    with tab2:
+        edit_questions()
 
 if __name__ == "__main__":
     main()

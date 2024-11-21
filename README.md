@@ -2,23 +2,27 @@
 
 ## Overview
 
-The Sterling Services: S.O.W. Generator is a Streamlit-based application designed to automate and streamline the process of creating Statements of Work (SOW). It uses OpenAI's GPT models to analyze project information from audio or text inputs and generate comprehensive answers to predefined project questions.
+The Sterling Services: S.O.W. Generator is a Streamlit-based application designed to automate and streamline the process of creating Statements of Work (SOW). It uses AWS Bedrock with Claude 3.5 Haiku to analyze project information from audio or text inputs and generate comprehensive answers to predefined project questions.
 
 ## Features
 
-- Audio transcription using OpenAI's Whisper API
-- Text file processing
-- Customizable project questions
-- AI-powered analysis of project information
-- Generation of formatted results in TXT, PDF, and DOCX formats
-- Downloadable transcripts with timestamps
+- Optimized audio transcription using AWS Transcribe with parallel processing
+- Automatic analysis after transcription
+- Support for multiple file formats (audio and text)
+- AI-powered analysis using AWS Bedrock and Claude 3.5 Haiku
+- Customizable project questions with instructions
+- Real-time progress tracking
+- Multiple output formats (TXT, PDF, DOCX)
 
 ## Requirements
 
-- Python 3.7+
-- Streamlit
-- OpenAI Python library
-- Other dependencies (listed in `requirements.txt`)
+- Python 3.10+
+- AWS Account with access to:
+  - AWS Bedrock (Claude 3.5 Haiku model)
+  - AWS Transcribe
+  - S3 Bucket
+- FFmpeg (for audio processing)
+- Required Python packages (listed in `requirements.txt`)
 
 ## Installation
 
@@ -28,12 +32,27 @@ The Sterling Services: S.O.W. Generator is a Streamlit-based application designe
    cd sterling-services-sow-generator
    ```
 
-2. Install the required dependencies:
+2. Install FFmpeg:
+   ```
+   # On Mac
+   brew install ffmpeg
+   
+   # On Ubuntu
+   sudo apt-get install ffmpeg
+   ```
+
+3. Install the required dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-3. Set up your OpenAI API key as an environment variable or be prepared to enter it in the app.
+4. Configure AWS credentials in `.env` file or environment variables:
+   ```
+   AWS_ACCESS_KEY_ID=your_access_key
+   AWS_SECRET_ACCESS_KEY=your_secret_key
+   AWS_REGION=your_region
+   AWS_BUCKET_NAME=your_bucket
+   ```
 
 ## Usage
 
@@ -42,21 +61,27 @@ The Sterling Services: S.O.W. Generator is a Streamlit-based application designe
    streamlit run app.py
    ```
 
-2. Open the provided URL in your web browser.
+2. Upload an audio or text file containing project information.
 
-3. Enter your OpenAI API key and select the GPT model you want to use.
-
-4. Upload an audio or text file containing project information.
-
-5. Customize the project questions if needed.
-
-6. Click "Analyze" to process the input and generate the SOW.
-
-7. Download the results in your preferred format (TXT, PDF, or DOCX).
+3. The app will automatically:
+   - Transcribe audio files (if applicable)
+   - Process the content using AWS Bedrock
+   - Generate comprehensive answers to project questions
+   - Display results with download options
 
 ## Customizing Questions
 
-The app allows you to customize the questions used for SOW generation. You can add, edit, or delete questions through the user interface. Changes are automatically saved to `Questions.json`.
+Edit questions through the UI or directly in `Questions.json`. Each question can include:
+- Category
+- Question text
+- Optional instructions for AI processing
+
+## Performance Optimization
+
+The app uses parallel processing for:
+- Audio transcription (chunked processing)
+- Question analysis (batch processing)
+- Result generation
 
 ## Contributing
 

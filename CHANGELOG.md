@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2024-11-20
+
+### Added (app.py)
+- Integrated AWS Bedrock with Claude 3.5 Haiku model
+- Added parallel processing for audio transcription
+- Implemented automatic analysis after transcription
+- Added progress tracking for both transcription and analysis
+
+### Changed (app.py)
+- Switched from Groq to AWS Bedrock for AI processing
+- Updated transcription process to use AWS Transcribe with optimizations
+- Improved question handling with support for instructions
+- Enhanced results display and formatting
+
+### Fixed (app.py)
+- Resolved DOCX generation style warnings
+- Fixed transcription progress tracking
+- Improved error handling for AWS services
+- Enhanced session state management
+
 ## [2.1.0] - 2024-09-06
 
 ### Changed (app_groq.py)
